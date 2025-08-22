@@ -29,6 +29,8 @@ from ofrak_cached_disassembly.components.cached_disassembly_unpacker import (
     CachedBasicBlockUnpacker,
     CachedGhidraCodeRegionModifier,
     CachedDecompilationAnalyzer,
+    CachedXrefUnpacker,
+    CachedXrefUnpackerConfig,
 )
 from ofrak_pyghidra.standalone.pyghidra_analysis import unpack
 from ofrak_type.error import NotFoundError
@@ -55,17 +57,29 @@ class PyGhidraAnalysisIdentifier(Identifier):
         resource.add_tag(PyGhidraProject)
 
 
-@dataclass
-class PyGhidraUnpackerConfig(ComponentConfig):
-    unpack_complex_blocks: bool
+# TODO: unused
+# @dataclass
+# class PyGhidraUnpackerConfig(ComponentConfig):
+#     unpack_complex_blocks: bool
 
 
 class PyGhidraAnalysisStore(CachedAnalysisStore):
     pass
 
 
+# TODO: rename
 class CachedGhidraCodeRegionModifier(CachedGhidraCodeRegionModifier):
-    pass
+    """
+    We need to have this here so that the CachedGhidraCodeRegionModifier is discovered
+    """
+
+
+class PyGhidraCachedXrefUnpacker(CachedXrefUnpacker):
+    targets = (PyGhidraProject,)
+
+    async def unpack(self, resource: Resource, config: CachedXrefUnpackerConfig = None) -> None:
+        await resource.run(PyGhidraAutoAnalyzer)
+        await super().unpack(resource, config)
 
 
 @dataclass

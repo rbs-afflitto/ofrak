@@ -10,6 +10,7 @@ from ofrak.core.code_region import CodeRegion, CodeRegionUnpacker
 from ofrak.core.complex_block import ComplexBlock, ComplexBlockUnpacker
 from ofrak.core.data import DataWord
 from ofrak.core.instruction import Instruction
+from ofrak.core.xref import Xref, XrefDirection
 from ofrak.service.component_locator_i import (
     ComponentLocatorInterface,
 )
@@ -124,6 +125,10 @@ class CachedProgramUnpacker(Unpacker[None]):
         self.analysis_store = analysis_store
 
     async def unpack(self, resource: Resource, config: None):
+        if not self.analysis_store.id_exists(resource.get_id()):
+            # TODO: this is a possible race condition - investigate
+            raise ValueError(f"There is no analysis for this resource!")
+
         analysis = self.analysis_store.get_analysis(resource.get_id())
         for key, mem_region in analysis.items():
             if key.startswith("seg"):
@@ -205,16 +210,32 @@ class CachedCodeRegionUnpacker(CodeRegionUnpacker):
         analysis = self.analysis_store.get_analysis(program_r.get_id())
         if analysis["metadata"]["backend"] == "ghidra":
             await resource.run(CachedGhidraCodeRegionModifier)
+        program_attributes = self.analysis_store.get_program_attributes(program_r.get_id())
+        if program_attributes is None:
+            program_attributes = await resource.analyze(ProgramAttributes)
         code_region_view = await resource.view_as(CodeRegion)
         func_keys = analysis[f"seg_{code_region_view.virtual_address}"]["children"]
         for func_key in func_keys:
-            complex_block = analysis[func_key]
-            cb = ComplexBlock(
-                virtual_address=complex_block["virtual_address"],
-                size=complex_block["size"],
-                name=complex_block["name"],
-            )
-            await code_region_view.create_child_region(cb)
+            if func_key.startswith("dw"):
+                data_word = analysis[func_key]
+                fmt_string = (
+                    program_attributes.endianness.get_struct_flag() + data_word["format_string"]
+                )
+                dw = DataWord(
+                    virtual_address=data_word["virtual_address"],
+                    size=data_word["size"],
+                    format_string=fmt_string,
+                    xrefs_to=tuple(data_word["xrefs_to"]),
+                )
+                await code_region_view.create_child_region(dw)
+            else:
+                complex_block = analysis[func_key]
+                cb = ComplexBlock(
+                    virtual_address=complex_block["virtual_address"],
+                    size=complex_block["size"],
+                    name=complex_block["name"],
+                )
+                await code_region_view.create_child_region(cb)
 
 
 class CachedComplexBlockUnpacker(ComplexBlockUnpacker):
@@ -339,3 +360,55 @@ class CachedDecompilationAnalyzer(DecompilationAnalyzer):
         resource.add_tag(DecompilationAnalysis)
         await resource.save()
         return DecompilationAnalysis(decomp)
+
+
+@dataclass
+class CachedXrefUnpackerConfig:
+    bidirectional: bool = False
+
+
+class CachedXrefUnpacker(Unpacker[None]):
+    """
+    Create Xref children for all data xrefs found in the analysis. By default only creates "to" direction Xrefs
+    but can do both directions if bidiretional is set to True in the config. Currently only supports data xrefs.
+    """
+
+    targets = (CachedAnalysis,)
+    children = (Xref,)
+
+    def __init__(
+        self,
+        resource_factory: ResourceFactory,
+        data_service: DataServiceInterface,
+        resource_service: ResourceServiceInterface,
+        analysis_store: CachedAnalysisStore,
+        component_locator: ComponentLocatorInterface,
+    ):
+        super().__init__(resource_factory, data_service, resource_service, component_locator)
+        self.analysis_store = analysis_store
+
+    async def unpack(self, resource: Resource, config: CachedXrefUnpackerConfig = None) -> None:
+        if not self.analysis_store.id_exists(resource.get_id()):
+            raise ValueError("No analysis stored for this resource!")
+
+        analysis = self.analysis_store.get_analysis(resource.get_id())
+        for key, dataword in analysis.items():
+            if not key.startswith("dw"):
+                continue
+
+            for xref in dataword["xrefs_to"]:
+                await resource.create_child_from_view(
+                    Xref(
+                        virtual_address=dataword["virtual_address"],
+                        ref_address=xref,
+                        direction=XrefDirection.TO,
+                    )
+                )
+                if config is not None and config.bidirectional:
+                    await resource.create_child_from_view(
+                        Xref(
+                            virtual_address=xref,
+                            ref_address=dataword["virtual_address"],
+                            direction=XrefDirection.FROM,
+                        )
+                    )

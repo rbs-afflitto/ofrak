@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from ofrak.component.unpacker import Unpacker
+from ofrak.core.data import DataWord
 from ofrak.core.complex_block import ComplexBlock
 from ofrak.core.memory_region import MemoryRegion
 from ofrak.resource import Resource
@@ -19,7 +20,10 @@ class CodeRegionUnpacker(Unpacker[None], ABC):
     """
 
     targets = (CodeRegion,)
-    children = (ComplexBlock,)
+    children = (
+        ComplexBlock,
+        DataWord,
+    )
     id = b"CodeRegionUnpacker"
 
     @abstractmethod

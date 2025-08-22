@@ -97,6 +97,34 @@ def unpack(program_file, decompiled, language=None, base_address=None):
                     cb["children"].append(dw_key)
                     main_dictionary[dw_key] = dw
                 main_dictionary[cb_key] = cb
+
+            # Find any datawords existing outside of functions/complex blocks. This is not optimal, we're going to get
+            # duplicates of any datawords that are in CBs and we have to check if we've already found it.
+            cr_start_address = (
+                flat_api.getAddressFactory()
+                .getDefaultAddressSpace()
+                .getAddress(hex(code_region["virtual_address"]))
+            )
+            cr_end_address = (
+                flat_api.getAddressFactory()
+                .getDefaultAddressSpace()
+                .getAddress(hex(code_region["virtual_address"] + code_region["size"]))
+            )
+            data_words = _get_data_words_in_range(cr_start_address, cr_end_address, flat_api)
+            for dw in data_words:
+                if dw["virtual_address"] < _parse_offset(cr_start_address) or (
+                    dw["virtual_address"] + dw["size"]
+                ) > _parse_offset(cr_end_address):
+                    logging.warning(
+                        f"Data Word 0x{dw['virtual_address']:x} (size {dw['size']}) does not fall within "
+                        f"code region {hex(_parse_offset(cr_start_address))}-{hex(_parse_offset(cr_end_address))}"
+                    )
+                    continue
+                dw_key = f"dw_{dw['virtual_address']}"
+                if dw_key not in main_dictionary:
+                    main_dictionary[dw_key] = dw
+                    code_region["children"].append(dw_key)
+
     return main_dictionary
 
 
@@ -166,6 +194,30 @@ def _unpack_code_region(code_region, flat_api):
     return functions
 
 
+# def _get_datawords_in_code_region(code_region, flat_api):
+#     data_words = []
+#     start_address = (
+#         flat_api.getAddressFactory()
+#         .getDefaultAddressSpace()
+#         .getAddress(hex(code_region["virtual_address"]))
+#     )
+#     end_address = (
+#         flat_api.getAddressFactory()
+#         .getDefaultAddressSpace()
+#         .getAddress(hex(code_region["virtual_address"] + code_region["size"]))
+#     )
+#     data_word = flat_api.getDataAt(start_address)
+#     if data_word is None:
+#         data_word = flat_api.getDataAfter(start_address)
+#         if data_word is None:
+#             return data_words
+
+#     while data_word is not None and end_address.subtract(data_word.getAddress()) > 0:
+#         virtual_address = _parse_offset(data_word.getAddress())
+#         start = _parse_offset(data_word.getAddress())
+#         end = _parse_offset(data_word.getMaxAddress())
+
+
 def _unpack_complex_block(func, flat_api):
     from ghidra.program.model.block import BasicBlockModel
     from java.math import BigInteger  #  Java packages must be imported after pyghidra.start()
@@ -231,10 +283,24 @@ def _unpack_complex_block(func, flat_api):
         bbs.append((ghidra_block, bb))
 
     end_data_addr, end_code_addr = _get_last_address(func, flat_api)
+    dws = _get_data_words_in_range(end_code_addr, flat_api.toAddr(end_data_addr), flat_api)
 
+    return bbs, dws
+
+
+def _get_data_words_in_range(start, end, flat_api):
     dws = []
-    data = flat_api.getDataAt(end_code_addr)
-    while data is not None and _parse_offset(data.getAddress()) <= end_data_addr:
+    data = flat_api.getDataAt(start)
+    if data is None:
+        data = flat_api.getDataAfter(start)
+        if data is None:
+            return dws
+
+    while (
+        data is not None
+        and data.getAddress().hasSameAddressSpace(end)
+        and data.getAddress().subtract(end) <= 0
+    ):
         num_words = 1
         word_size = data.getLength()
         if word_size == 1:
@@ -247,7 +313,7 @@ def _unpack_complex_block(func, flat_api):
             size_flag = "Q"
         else:
             size_flag = "B"
-            num_words = word_size
+            # num_words = word_size  # TODO: this was def a bug!!
             word_size = 1
 
         refs = [
@@ -264,8 +330,7 @@ def _unpack_complex_block(func, flat_api):
                 }
             )
         data = flat_api.getDataAfter(data)
-
-    return bbs, dws
+    return dws
 
 
 def _unpack_basic_block(block, flat_api):
@@ -413,7 +478,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--outfile", "-o", type=str, required=True, help="The output json file.")
     parser.add_argument(
-        "--decompile", "-d", type=bool, default=False, help="decompile functions in cache"
+        "--decompile", "-d", action="store_true", help="decompile functions in cache"
     )
     parser.add_argument("--language", "-l", default=None, help="Ghidra language id")
     parser.add_argument(
