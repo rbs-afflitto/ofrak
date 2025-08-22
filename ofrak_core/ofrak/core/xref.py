@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from ofrak.core.addressable import Addressable
+from ofrak.model.resource_model import index
 
 
 class XrefDirection(Enum):
@@ -16,6 +17,14 @@ class Xref(Addressable):
 
     ref_address: int
     direction: XrefDirection
+
+    @index
+    def RefAddress(self) -> int:
+        return self.ref_address
+
+    @index
+    def Direction(self) -> str:
+        return self.direction.value
 
     def __str__(self) -> str:
         if self.direction == XrefDirection.TO:
