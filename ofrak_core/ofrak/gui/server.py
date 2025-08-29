@@ -199,6 +199,10 @@ class AiohttpOFRAKServer:
                     "/{resource_id}/get_components",
                     self.get_components,
                 ),
+                web.post(
+                    "/{resource_id}/remove_component",
+                    self.remove_component,
+                ),
                 web.get("/{resource_id}/get_config_for_component", self.get_config_for_component),
                 web.post("/{resource_id}/run_component", self.run_component),
                 web.post(
@@ -909,6 +913,7 @@ class AiohttpOFRAKServer:
         incl_modifiers = options["modifiers"]
         incl_packers = options["packers"]
         incl_unpackers = options["unpackers"]
+        incl_docstrings = options.get("include_docstrings", False)
         components = self._get_specific_components(
             resource,
             show_all_components,
@@ -918,7 +923,46 @@ class AiohttpOFRAKServer:
             incl_packers,
             incl_unpackers,
         )
-        return json_response(self._serializer.to_pjson(components, Set[str]))
+        if incl_docstrings:
+            return json_response(
+                {
+                    type(component).__name__: _format_component_docstring(component)
+                    for component in components
+                },
+            )
+        else:
+            return json_response(
+                self._serializer.to_pjson(
+                    {type(component).__name__ for component in components}, Set[str]
+                )
+            )
+
+    @exceptions_to_http(SerializedError)
+    async def remove_component(self, request: Request) -> Response:
+        resource: Resource = await self._get_resource_for_request(request)
+        component_string = request.query.get("component")
+
+        if component_string is not None:
+            component = type(
+                self._ofrak_context.component_locator.get_by_id(component_string.encode("ascii"))
+            )
+        else:
+            return json_response(
+                {
+                    "success": False,
+                    "reason": f"Component {component_string} not found on this resource",
+                }
+            )
+
+        if hasattr(component, "outputs"):
+            outputs = getattr(component, "outputs")
+            for output in outputs:
+                resource.remove_component(component.get_id(), output)
+                resource.remove_attributes(output)
+        else:
+            resource.remove_component(component.get_id())
+        await resource.save()
+        return json_response({"success": True})
 
     @exceptions_to_http(SerializedError)
     async def get_config_for_component(self, request: Request) -> Response:
@@ -930,11 +974,19 @@ class AiohttpOFRAKServer:
             config = self._get_config_for_component(type(component))
         else:
             return json_response([])
-        if (
-            not config == inspect._empty
-            and not type(config) == type(None)
-            and not typing_inspect.is_optional_type(config)
-        ):
+        is_optional = typing_inspect.is_optional_type(config)
+        if is_optional:
+            union_types = get_args(config)
+            if len(union_types) == 0:
+                raise TypeError("The type presents as an optional but cannot unpack the union.")
+            config = union_types[0]
+            if isinstance(config, list):
+                raise TypeError("Nested union not expected while unpacking optional.")
+            if not issubclass(config, ComponentConfig):
+                raise TypeError(
+                    "Expected the unpacked optional to be a config, either this is not a true config or the union is in an unexpected order."
+                )
+        if not config == inspect._empty and not type(config) == type(None):
             _fields = []
             for field in fields(config):
                 field.type = self._modify_by_case(field.type)
@@ -956,6 +1008,7 @@ class AiohttpOFRAKServer:
                 {
                     "name": config.__name__,
                     "type": self._convert_to_class_name_str(config),
+                    "optional": is_optional,
                     "args": self._construct_arg_response(self._convert_to_class_name_str(config)),
                     "enum": self._construct_enum_response(config),
                     "fields": _fields,
@@ -963,6 +1016,16 @@ class AiohttpOFRAKServer:
             )
         else:
             return json_response([])
+
+    async def get_docstring_for_component(self, request: Request) -> Response:
+        component_string = request.query.get("component")
+        if component_string is not None:
+            component = type(
+                self._ofrak_context.component_locator.get_by_id(component_string.encode("ascii"))
+            )
+        else:
+            raise ValueError("component is required")
+        return json_response()
 
     @exceptions_to_http(SerializedError)
     async def run_component(self, request: Request) -> Response:
@@ -975,10 +1038,15 @@ class AiohttpOFRAKServer:
             config_type = self._get_config_for_component(component)
         else:
             return json_response([])
-        if config_type == inspect._empty or config_type is None:
+
+        try:
+            config_pjson = await request.json()
+            if config_type == inspect._empty or config_type is None or not config_pjson:
+                config = None
+            else:
+                config = self._serializer.from_pjson(config_pjson, config_type)
+        except:
             config = None
-        else:
-            config = self._serializer.from_pjson(await request.json(), config_type)
 
         config_str = str(config).replace("{", "{{").replace("}", "}}")
         script_str = (
@@ -1368,7 +1436,7 @@ class AiohttpOFRAKServer:
         incl_modifiers: bool,
         incl_packers: bool,
         incl_unpackers: bool,
-    ) -> List[str]:
+    ) -> List[ComponentInterface]:
         selected_components = []
         tags = resource.get_tags()
         if show_all_components and len(set(tags)) == 0:
@@ -1396,7 +1464,7 @@ class AiohttpOFRAKServer:
             if type(component).__name__ == "AngrAnalyzer":
                 # TODO: The config for this includes some angr types and can't be serialized
                 continue
-            selected_components.append(type(component).__name__)
+            selected_components.append(component)
 
         return selected_components
 
@@ -1585,3 +1653,24 @@ def json_response(
 
 def _format_default(default):
     return default.decode() if isinstance(default, bytes) else default
+
+
+def _format_component_docstring(component: ComponentInterface) -> str:
+    if component.__doc__ is None:
+        docstring = "No documentation is provided for this component."
+    else:
+        docstring = component.__doc__.strip()
+    if hasattr(component, "targets"):
+        docstring += "\nTargets:" + "".join(
+            [f"\n\t- {target.__name__}" for target in component.targets]
+        )
+    if hasattr(component, "children"):
+        docstring += "\nChildren:" + "".join(
+            [f"\n\t- {child.__name__}" for child in component.children]
+        )
+    if hasattr(component, "outputs"):
+        docstring += "\nOutputs:" + "".join(
+            [f"\n\t- {output.__name__}" for output in component.outputs]
+        )
+
+    return docstring
