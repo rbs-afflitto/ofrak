@@ -155,6 +155,8 @@ class PyGhidraBasicBlockUnpacker(CachedBasicBlockUnpacker):
 
 
 class PyGhidraDecompilationAnalyzer(CachedDecompilationAnalyzer):
+    id = b"PyGhidraDecompilationAnalyzer"
+
     targets = (ComplexBlock,)
     outputs = (DecompilationAnalysis,)
 
