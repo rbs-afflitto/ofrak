@@ -190,6 +190,7 @@ class AiohttpOFRAKServer:
                 web.post("/{resource_id}/search_for_string", self.search_for_string),
                 web.post("/{resource_id}/search_for_bytes", self.search_for_bytes),
                 web.post("/{resource_id}/add_tag", self.add_tag),
+                web.post("/{resource_id}/remove_tag", self.remove_tag),
                 web.post(
                     "/{resource_id}/add_flush_to_disk_to_script", self.add_flush_to_disk_to_script
                 ),
@@ -869,6 +870,28 @@ class AiohttpOFRAKServer:
         await self.script_builder.add_action(resource, script_str, ActionType.MOD)
         try:
             resource.add_tag(tag)
+            await resource.save()
+            await self.script_builder.commit_to_script(resource)
+        except Exception as e:
+            await self.script_builder.clear_script_queue(resource)
+            raise e
+        return json_response(self._serialize_resource(resource))
+
+    @exceptions_to_http(SerializedError)
+    async def remove_tag(self, request: Request) -> Response:
+        resource = await self._get_resource_for_request(request)
+        tag = self._serializer.from_pjson(await request.json(), ResourceTag)
+        script_str = (
+            """
+        {resource}.remove_tag"""
+            f"""({tag.__name__})"""
+        )
+        await self.script_builder.add_action(resource, script_str, ActionType.MOD)
+        script_str = """
+        await {resource}.save()"""
+        await self.script_builder.add_action(resource, script_str, ActionType.MOD)
+        try:
+            resource.remove_tag(tag)
             await resource.save()
             await self.script_builder.commit_to_script(resource)
         except Exception as e:
