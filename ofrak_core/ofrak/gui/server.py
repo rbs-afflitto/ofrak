@@ -86,7 +86,7 @@ from ofrak.model.resource_model import (
     ResourceAttributes,
     MutableResourceModel,
 )
-from ofrak.model.viewable_tag_model import ResourceViewContext
+from ofrak.model.viewable_tag_model import ResourceViewContext, ViewableResourceTag
 from ofrak.resource import Resource
 from ofrak.service.error import SerializedError
 from ofrak.service.serialization.pjson import (
@@ -183,6 +183,8 @@ class AiohttpOFRAKServer:
                 web.post("/batch/get_children", self.batch_get_children),
                 web.post("/{resource_id}/queue_patch", self.queue_patch),
                 web.post("/{resource_id}/create_mapped_child", self.create_mapped_child),
+                web.post("/get_view_schema", self.get_view_schema),
+                web.post("/{resource_id}/add_view_to_resource", self.add_view_to_resource),
                 web.post("/{resource_id}/find_and_replace", self.find_and_replace),
                 web.post("/{resource_id}/add_comment", self.add_comment),
                 web.post("/{resource_id}/delete_comment", self.delete_comment),
@@ -695,6 +697,83 @@ class AiohttpOFRAKServer:
         return json_response(self._serialize_resource(child))
 
     @exceptions_to_http(SerializedError)
+    async def get_view_schema(self, request: Request) -> Response:
+        """
+        Get the schema for a ResourceView type, including all fields and their types.
+        This is similar to get_config_for_component but for ResourceViews.
+        """
+        view_type: Type[ViewableResourceTag] = self._serializer.from_pjson(
+            await request.json(), Type[ViewableResourceTag]
+        )
+
+        import dataclasses
+
+        # Build schema similar to get_config_for_component
+        fields_info = []
+        for field in dataclasses.fields(view_type):
+            if field.name.startswith("_"):  # Skip private fields like _resource, _deleted
+                continue
+
+            field_info = {
+                "name": field.name,
+                "type": self._convert_to_class_name_str(field.type),
+                "args": self._construct_arg_response(field.type),
+                "fields": self._construct_field_response(field.type),
+                "enum": self._construct_enum_response(field.type),
+                "default": _format_default(field.default)
+                if not isinstance(field.default, dataclasses._MISSING_TYPE)
+                else None,
+                "required": field.default == dataclasses.MISSING,
+            }
+            fields_info.append(field_info)
+
+        # Return schema in same format as get_config_for_component
+        schema = {
+            "name": view_type.__name__,
+            "type": self._convert_to_class_name_str(view_type),
+            "fields": fields_info,
+            # Optionally include the composed attribute types for reference
+            "composed_attributes": self._serializer.to_pjson(
+                list(view_type.composed_attributes_types), List[Type[ResourceAttributes]]
+            )
+            if hasattr(view_type, "composed_attributes_types")
+            else [],
+        }
+
+        return json_response(schema)
+
+    @exceptions_to_http(SerializedError)
+    async def add_view_to_resource(self, request: Request) -> Response:
+        """
+        Add a view to a resource using the view type and field values.
+        """
+        resource = await self._get_resource_for_request(request)
+        body = await request.json()
+
+        view_type: Type[ViewableResourceTag] = self._serializer.from_pjson(
+            body["view_type"], Type[ViewableResourceTag]
+        )
+        field_values = body["fields"]
+
+        # Create the view instance with the provided field values
+        view_instance = view_type(**field_values)
+
+        script_str = (
+            """
+        {resource}"""
+            f""".add_view({view_instance.__repr__()})
+        """
+            """await {resource}.save()
+        """
+        )
+        await self.script_builder.add_action(resource, script_str, ActionType.MOD)
+
+        # Add the view to the resource
+        resource.add_view(view_instance)
+        await resource.save()
+        return json_response(self._serialize_resource(resource))
+
+    @exceptions_to_http(SerializedError)
     async def find_and_replace(self, request: Request) -> Response:
         resource = await self._get_resource_for_request(request)
         config = self._serializer.from_pjson(await request.json(), StringFindReplaceConfig)
@@ -1062,14 +1141,11 @@ class AiohttpOFRAKServer:
         else:
             return json_response([])
 
-        try:
-            config_pjson = await request.json()
-            if config_type == inspect._empty or config_type is None or not config_pjson:
-                config = None
-            else:
-                config = self._serializer.from_pjson(config_pjson, config_type)
-        except:
+        if config_type == inspect._empty or config_type is None or not request.body_exists:
             config = None
+        else:
+            config_pjson = await request.json()
+            config = self._serializer.from_pjson(config_pjson, config_type)
 
         config_str = str(config).replace("{", "{{").replace("}", "}}")
         script_str = (
