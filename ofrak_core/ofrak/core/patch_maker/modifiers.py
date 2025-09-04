@@ -150,6 +150,11 @@ class PatchFromSourceModifier(Modifier):
             patch_bom.unresolved_symbols,
         )
 
+        # Get existing symbols
+        target_binary = await resource.view_as(LinkableBinary)
+        symbols = await target_binary.get_symbols()
+        symbols_for_patch_maker = {sym.name: sym.virtual_address for sym in symbols}
+
         # To support additional dynamic references in user space executables
         # Create and use a modifier that will:
         # 1. Extend .got, add new entry
@@ -162,6 +167,7 @@ class PatchFromSourceModifier(Modifier):
         fem = patch_maker.make_fem(
             [(patch_bom, p), target_linkable_bom_info],
             exec_path,
+            additional_symbols=symbols_for_patch_maker,
         )
         await resource.run(
             SegmentInjectorModifier,
@@ -169,7 +175,6 @@ class PatchFromSourceModifier(Modifier):
         )
 
         # Refresh LinkableBinary with the LinkableSymbols used in this patch
-        target_binary = await resource.view_as(LinkableBinary)
         await target_binary.define_linkable_symbols_from_patch(
             fem.executable.symbols, program_attributes
         )
