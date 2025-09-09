@@ -206,7 +206,10 @@ class CachedCodeRegionUnpacker(CodeRegionUnpacker):
         if analysis["metadata"]["backend"] == "ghidra":
             await resource.run(CachedGhidraCodeRegionModifier)
         code_region_view = await resource.view_as(CodeRegion)
-        func_keys = analysis[f"seg_{code_region_view.virtual_address}"]["children"]
+        seg_key = f"seg_{code_region_view.virtual_address}"
+        if seg_key not in analysis:
+            return
+        func_keys = analysis[seg_key]["children"]
         for func_key in func_keys:
             complex_block = analysis[func_key]
             cb = ComplexBlock(
