@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Any, Tuple, Optional
 
+from ofrak_type.range import Range
 from ofrak.model.resource_model import (
     ResourceModel,
     ResourceIndexedAttribute,
@@ -36,6 +37,12 @@ class ResourceAttributeRangeFilter(ResourceAttributeFilter):
 
     min: Any = None
     max: Any = None
+
+    @staticmethod
+    def from_range(
+        attribute: ResourceIndexedAttribute, range: Range
+    ) -> "ResourceAttributeRangeFilter":
+        return ResourceAttributeRangeFilter(attribute, min=range.start, max=range.end)
 
 
 @dataclass
