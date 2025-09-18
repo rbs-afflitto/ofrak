@@ -1,4 +1,4 @@
-pyghidra: clean fib-pyghidra fib-thumb-pyghidra hello.x64.elf-pyghidra
+pyghidra: clean fib-pyghidra fib-thumb-pyghidra hello.x64.elf-pyghidra rebase-pyghidra rebase-pie-pyghidra
 
 fib-pyghidra:
 	python3 -m ofrak_pyghidra analyze -i fib -o fib.json
@@ -9,5 +9,11 @@ fib-thumb-pyghidra:
 hello.x64.elf-pyghidra:
 	python3 -m ofrak_pyghidra analyze -i hello.x64.elf -o hello.x64.elf.json -d
 
+rebase-pyghidra:
+	python3 -m ofrak_pyghidra analyze -i rebase -o rebase.json -d
+
+rebase-pie-pyghidra:
+	python3 -m ofrak_pyghidra analyze -i rebase_pie -o rebase_pie.json -d
+
 clean:
-	rm -f fib.json fib_thumb.json hello.x64.elf.json 
+	rm -f fib.json fib_thumb.json hello.x64.elf.json rebase.json rebase_pie.json

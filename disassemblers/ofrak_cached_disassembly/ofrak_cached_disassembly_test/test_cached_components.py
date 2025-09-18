@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import os
 from typing import Dict, Tuple
 import pytest
@@ -144,6 +145,59 @@ async def test_case(
         CachedAnalysisAnalyzer, config=CachedAnalysisAnalyzerConfig(filename=cache_path)
     )
     return resource, mode
+
+
+@dataclass
+class CodeRegionRebaseTestCase:
+    asset_path: str
+    rebased_code_regions: List[CodeRegion]
+
+
+REBASE_TEST_CASES = [
+    CodeRegionRebaseTestCase(
+        "rebase",
+        [
+            CodeRegion(0x1000, 0x2000),
+            CodeRegion(0x4000, 0x2000),
+            CodeRegion(0x101000, 0x2000),
+        ],
+    ),
+    CodeRegionRebaseTestCase(
+        "rebase_pie",
+        [
+            CodeRegion(0x101000, 0x2000),
+            CodeRegion(0x104000, 0x2000),
+            CodeRegion(0x201000, 0x2000),
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize("test_case", REBASE_TEST_CASES)
+@pytest.mark.parametrize("reverse_unpack_order", [False, True])
+async def test_code_region_rebase(
+    ofrak_context: OFRAKContext, test_case: CodeRegionRebaseTestCase, reverse_unpack_order: bool
+):
+    full_asset_path = os.path.join(ASSETS_DIR, test_case.asset_path)
+    root_resource = await ofrak_context.create_root_resource_from_file(full_asset_path)
+    await root_resource.run(
+        CachedAnalysisAnalyzer,
+        CachedAnalysisAnalyzerConfig(os.path.join(ASSETS_DIR, full_asset_path + ".json")),
+    )
+    await root_resource.unpack()
+    crs = await root_resource.get_children_as_view(
+        v_type=CodeRegion,
+        r_filter=ResourceFilter.with_tags(CodeRegion),
+    )
+    for cr in sorted(crs, key=lambda x: x.virtual_address, reverse=reverse_unpack_order):
+        await cr.resource.unpack()
+
+    assert set(
+        await root_resource.get_children_as_view(
+            v_type=CodeRegion,
+            r_filter=ResourceFilter.with_tags(CodeRegion),
+        )
+    ) == set(test_case.rebased_code_regions)
 
 
 async def test_instruction_mode(test_case: Tuple[Resource, InstructionSetMode]):
