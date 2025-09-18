@@ -152,11 +152,11 @@ class CachedGhidraCodeRegionModifier(Modifier[None]):
         self.analysis_store = analysis_store
 
     async def modify(self, resource: Resource, config: None):
+        GHIDRA_PIE_OFFSET = 0x100000
         program_r = await resource.get_only_ancestor(ResourceFilter.with_tags(CachedAnalysis))
         analysis = self.analysis_store.get_analysis(program_r.get_id())
-        ofrak_code_regions = await program_r.get_descendants_as_view(
-            v_type=CodeRegion, r_filter=ResourceFilter(tags=[CodeRegion])
-        )
+
+        code_region = await resource.view_as(CodeRegion)
         backend_code_regions: List[CodeRegion] = []
         for key, mem_region in analysis.items():
             if key.startswith("seg") and mem_region["executable"]:
@@ -166,22 +166,32 @@ class CachedGhidraCodeRegionModifier(Modifier[None]):
                     )
                 )
 
-        ofrak_code_regions = sorted(ofrak_code_regions, key=lambda cr: cr.virtual_address)
-        backend_code_regions = sorted(backend_code_regions, key=lambda cr: cr.virtual_address)
-
-        if len(ofrak_code_regions) > 0:
-            code_region = await resource.view_as(CodeRegion)
-            relative_va = code_region.virtual_address - ofrak_code_regions[0].virtual_address
-
-            for backend_cr in backend_code_regions:
-                backend_relative_va = (
-                    backend_cr.virtual_address - backend_code_regions[0].virtual_address
-                )
-                if backend_relative_va == relative_va and backend_cr.size == code_region.size:
-                    code_region.resource.add_view(
-                        backend_cr
+        # Match up backend code regions to the current one. The code region should map to either:
+        # - A backend region with the same size and same virtual address
+        # - A backend region with the same size and a virtual address which is 0x100000 higher than the current address
+        for backend_code_region in backend_code_regions:
+            if backend_code_region.size == code_region.size:
+                if backend_code_region.virtual_address == code_region.virtual_address:
+                    # The region has already been rebased (or this is not a PIE executable)
+                    return
+                elif (
+                    backend_code_region.virtual_address
+                    == code_region.virtual_address + GHIDRA_PIE_OFFSET
+                ):
+                    # Rebase the code region by re-adding a CodeRegion view with the rebased address
+                    resource.add_view(
+                        CodeRegion(
+                            backend_code_region.virtual_address,
+                            code_region.size,
+                        )
                     )  # TODO: https://github.com/redballoonsecurity/ofrak/issues/537
-        await resource.save()
+                    await resource.save()
+                    return
+
+        raise ValueError(
+            f"Could not find a backend region matching the code region with address "
+            f"{hex(code_region.virtual_address)} and size {code_region.size}"
+        )
 
 
 class CachedCodeRegionUnpacker(CodeRegionUnpacker):
@@ -206,7 +216,10 @@ class CachedCodeRegionUnpacker(CodeRegionUnpacker):
         if analysis["metadata"]["backend"] == "ghidra":
             await resource.run(CachedGhidraCodeRegionModifier)
         code_region_view = await resource.view_as(CodeRegion)
-        func_keys = analysis[f"seg_{code_region_view.virtual_address}"]["children"]
+        seg_key = f"seg_{code_region_view.virtual_address}"
+        if seg_key not in analysis:
+            return
+        func_keys = analysis[seg_key]["children"]
         for func_key in func_keys:
             complex_block = analysis[func_key]
             cb = ComplexBlock(
