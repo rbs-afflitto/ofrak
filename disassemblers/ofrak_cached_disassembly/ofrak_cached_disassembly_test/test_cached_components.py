@@ -146,6 +146,25 @@ async def test_case(
     return resource, mode
 
 
+async def test_code_region_modifier(ofrak_context: OFRAKContext):
+    assets = ["rebase", "rebase_pie"]
+    for asset in assets:
+        root_resource = await ofrak_context.create_root_resource_from_file(
+            os.path.join(ASSETS_DIR, asset)
+        )
+        await root_resource.run(
+            CachedAnalysisAnalyzer,
+            CachedAnalysisAnalyzerConfig(os.path.join(ASSETS_DIR, asset + ".json")),
+        )
+        await root_resource.unpack()
+        crs = await root_resource.get_children_as_view(
+            v_type=CodeRegion,
+            r_filter=ResourceFilter.with_tags(CodeRegion),
+        )
+        for cr in sorted(crs, key=lambda x: x.virtual_address):
+            await cr.resource.unpack()
+
+
 async def test_instruction_mode(test_case: Tuple[Resource, InstructionSetMode]):
     """
     Test unpacking instructions with different instructions sets
