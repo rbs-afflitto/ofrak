@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import os
+from pprint import pprint
 from typing import Dict, Tuple
 import pytest
 from ofrak.core.complex_block import ComplexBlock
@@ -157,17 +158,20 @@ REBASE_TEST_CASES = [
     CodeRegionRebaseTestCase(
         "rebase",
         [
-            CodeRegion(0x1000, 0x2000),
-            CodeRegion(0x4000, 0x2000),
-            CodeRegion(0x101000, 0x2000),
+            CodeRegion(0x401000, 23),
+            CodeRegion(0x401020, 32),
+            CodeRegion(0x401040, 256),
+            CodeRegion(0x401140, 9),
         ],
     ),
     CodeRegionRebaseTestCase(
         "rebase_pie",
         [
-            CodeRegion(0x101000, 0x2000),
-            CodeRegion(0x104000, 0x2000),
-            CodeRegion(0x201000, 0x2000),
+            CodeRegion(0x101000, 23),
+            CodeRegion(0x101020, 32),
+            CodeRegion(0x101040, 8),
+            CodeRegion(0x101050, 259),
+            CodeRegion(0x101154, 9),
         ],
     ),
 ]
@@ -191,6 +195,15 @@ async def test_code_region_rebase(
     )
     for cr in sorted(crs, key=lambda x: x.virtual_address, reverse=reverse_unpack_order):
         await cr.resource.unpack()
+
+    pprint(
+        list(
+            await root_resource.get_children_as_view(
+                v_type=CodeRegion,
+                r_filter=ResourceFilter.with_tags(CodeRegion),
+            )
+        )
+    )
 
     assert set(
         await root_resource.get_children_as_view(
