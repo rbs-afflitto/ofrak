@@ -42,6 +42,11 @@ class LiefAddSegmentModifier(Modifier[LiefAddSegmentConfig]):
         if not binary or not isinstance(binary, lief.ELF.Binary):
             raise ValueError("Lief failed parsing binary.")
 
+        if type(config.virtual_address) != int:
+            raise ValueError(f"virtual_address must be int, got {type(config.virtual_address)}")
+        if type(config.alignment) != int:
+            raise ValueError(f"alignment must be int, got {type(config.alignment)}")
+
         segment = lief.ELF.Segment()
         segment.type = lief.ELF.Segment.TYPE.LOAD
         segment.content = memoryview(bytearray(config.content))
