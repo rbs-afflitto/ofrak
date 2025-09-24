@@ -188,10 +188,10 @@ class CachedGhidraCodeRegionModifier(Modifier[None]):
                     await resource.save()
                     return
 
-        raise ValueError(
-            f"Could not find a backend region matching the code region with address "
-            f"{hex(code_region.virtual_address)} and size {code_region.size}"
-        )
+        # raise ValueError(
+        #     f"Could not find a backend region matching the code region with address "
+        #     f"{hex(code_region.virtual_address)} and size {code_region.size}"
+        # )
 
 
 class CachedCodeRegionUnpacker(CodeRegionUnpacker):
