@@ -266,7 +266,7 @@ class ActiveResourceSortLogic(ResourceSortLogic[T]):
     def _get_attribute_value(self, resource: ResourceModel) -> T:
         value = self.attribute.get_value(resource)
         if value is None:
-            raise ValueError()
+            raise ValueError(f"Attribute {str(self.attribute)} has no value")
         else:
             return value
 
