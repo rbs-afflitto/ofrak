@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased](https://github.com/redballoonsecurity/ofrak/tree/master/)
 ### Added
+- Add DMG (Apple Disk Image) unpacker component with support for multiple compression methods including raw, zlib, bzip2, and zero-fill ([#PLACEHOLDER](https://github.com/redballoonsecurity/ofrak/pull/PLACEHOLDER))
 - Add `-V, --version` flag to ofrak cli ([#652](https://github.com/redballoonsecurity/ofrak/pull/652))
 
 ## [3.3.0](https://github.com/redballoonsecurity/ofrak/compare/ofrak-v3.2.0...ofrak-v3.3.0) - 2025-10-03
