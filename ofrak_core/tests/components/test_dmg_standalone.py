@@ -48,25 +48,25 @@ def test_koly_block_parsing():
     # Add segment_id
     offset = struct.calcsize(">4sIIIQQQQQII")
     koly_data[offset:offset+16] = b'\xAA' * 16
-    offset += 16 + 6
+    offset += 16
 
-    # Add checksum fields
-    checksum_data = struct.pack(">II", 1, 32)
+    # Add checksum fields (128 bytes for data_checksum)
+    checksum_data = struct.pack(">II", 1, 128)
     koly_data[offset:offset+len(checksum_data)] = checksum_data
-    offset += len(checksum_data) + 32
+    offset += len(checksum_data) + 128
 
     # Add XML info
     xml_info = struct.pack(">QQ", 0x5000, 0x1000)
     koly_data[offset:offset+len(xml_info)] = xml_info
     offset += len(xml_info) + 120
 
-    # Add final fields: master_checksum_type, master_checksum_size, (32 bytes checksum), image_variant, sector_count, reserved fields
-    final_data = struct.pack(">II", 2, 32)  # master_checksum_type, master_checksum_size
+    # Add final fields: master_checksum_type, master_checksum_size, (128 bytes checksum), image_variant, sector_count, reserved fields
+    final_data = struct.pack(">II", 2, 128)  # master_checksum_type, master_checksum_size
     koly_data[offset:offset+len(final_data)] = final_data
     offset += len(final_data)
 
-    # Skip 32 bytes for master_checksum
-    offset += 32
+    # Skip 128 bytes for master_checksum
+    offset += 128
 
     # Add image_variant, sector_count, and reserved fields
     image_and_sector = struct.pack(">IQIII", 0, 0x10000, 0, 0, 0)  # image_variant, sector_count, 3 reserved fields
@@ -223,8 +223,7 @@ def test_chunk_decompression():
 
     # Zero fill should return zeros
     from ofrak.core.dmg import DmgUnpacker
-    unpacker = DmgUnpacker()
-    result = unpacker._decompress_chunk(b'', chunk_zero, 0)
+    result = DmgUnpacker._decompress_chunk(b'', chunk_zero, 0)
     assert result == b'\x00' * (10 * 512)
 
     print("✓ Zero-fill decompression successful")
@@ -238,7 +237,7 @@ def test_chunk_decompression():
         compressed_length=len(test_data),
     )
 
-    result = unpacker._decompress_chunk(test_data, chunk_raw, 0)
+    result = DmgUnpacker._decompress_chunk(test_data, chunk_raw, 0)
     assert result == test_data
 
     print("✓ Raw decompression successful")
@@ -253,7 +252,7 @@ def test_chunk_decompression():
         compressed_length=len(compressed_data),
     )
 
-    result = unpacker._decompress_chunk(compressed_data, chunk_zlib, 0)
+    result = DmgUnpacker._decompress_chunk(compressed_data, chunk_zlib, 0)
     assert result == test_data
 
     print("✓ zlib decompression successful")

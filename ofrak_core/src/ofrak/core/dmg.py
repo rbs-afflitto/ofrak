@@ -95,6 +95,7 @@ except ImportError:
 # Compression type constants
 COMPRESSION_ZERO_FILL = 0x00000000
 COMPRESSION_RAW = 0x00000001
+COMPRESSION_IGNORE = 0x00000002  # Free/unused space - skip
 COMPRESSION_ADC = 0x80000004
 COMPRESSION_ZLIB = 0x80000005
 COMPRESSION_BZIP2 = 0x80000006
@@ -125,18 +126,96 @@ class KolyBlock(ResourceView):
     segment_id: bytes  # 16 bytes UUID
     data_checksum_type: int
     data_checksum_size: int
-    data_checksum: bytes  # 32 bytes
+    data_checksum: bytes  # 128 bytes (32 uint32s)
     xml_offset: int
     xml_length: int
     reserved1: bytes  # 120 bytes
     master_checksum_type: int
     master_checksum_size: int
-    master_checksum: bytes  # 32 bytes
+    master_checksum: bytes  # 128 bytes (32 uint32s)
     image_variant: int
     sector_count: int
     reserved2: int
     reserved3: int
     reserved4: int
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "KolyBlock":
+        """
+        Parse koly block from bytes for standalone testing.
+
+        Args:
+            data: 512 bytes of koly block data
+
+        Returns:
+            Parsed KolyBlock instance
+        """
+        import struct
+
+        if len(data) != 512:
+            raise ValueError(f"Koly block must be 512 bytes, got {len(data)}")
+
+        # Parse koly block fields using struct.unpack (big-endian)
+        (
+            signature,
+            version,
+            header_size,
+            flags,
+            running_data_fork_offset,
+            data_fork_offset,
+            data_fork_length,
+            rsrc_fork_offset,
+            rsrc_fork_length,
+            segment_number,
+            segment_count,
+            segment_id,
+            data_checksum_type,
+            data_checksum_size,
+            data_checksum,
+            xml_offset,
+            xml_length,
+            reserved1,
+            master_checksum_type,
+            master_checksum_size,
+            master_checksum,
+            image_variant,
+            sector_count,
+            reserved2,
+            reserved3,
+            reserved4,
+        ) = struct.unpack(">4sIIIQQQQQII16sII128sQQ120sII128sIQIII", data)
+
+        if signature != b"koly":
+            raise ValueError(f"Invalid koly signature: {signature}")
+
+        return cls(
+            signature=signature,
+            version=version,
+            header_size=header_size,
+            flags=flags,
+            running_data_fork_offset=running_data_fork_offset,
+            data_fork_offset=data_fork_offset,
+            data_fork_length=data_fork_length,
+            rsrc_fork_offset=rsrc_fork_offset,
+            rsrc_fork_length=rsrc_fork_length,
+            segment_number=segment_number,
+            segment_count=segment_count,
+            segment_id=segment_id,
+            data_checksum_type=data_checksum_type,
+            data_checksum_size=data_checksum_size,
+            data_checksum=data_checksum,
+            xml_offset=xml_offset,
+            xml_length=xml_length,
+            reserved1=reserved1,
+            master_checksum_type=master_checksum_type,
+            master_checksum_size=master_checksum_size,
+            master_checksum=master_checksum,
+            image_variant=image_variant,
+            sector_count=sector_count,
+            reserved2=reserved2,
+            reserved3=reserved3,
+            reserved4=reserved4,
+        )
 
 
 @dataclass
@@ -158,6 +237,78 @@ class MishBlock(ResourceView):
     checksum_size: int
     checksum: bytes
     chunks: List["ChunkEntry"]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "MishBlock":
+        """
+        Parse mish block from bytes for standalone testing.
+
+        Args:
+            data: Mish block data (204 byte header + chunk entries)
+
+        Returns:
+            Parsed MishBlock instance
+        """
+        import struct
+
+        if len(data) < 204:
+            raise ValueError(f"Mish block must be at least 204 bytes, got {len(data)}")
+
+        # Parse mish block header (204 bytes)
+        (
+            signature,
+            version,
+            sector_number,
+            sector_count,
+            data_offset,
+            buffers_needed,
+            block_descriptors,
+            reserved_48,
+            checksum_type,
+            checksum_size,
+            checksum,
+            reserved_76,
+        ) = struct.unpack(">4sIQQQII48sII32s76s", data[:204])
+
+        if signature != b"mish":
+            raise ValueError(f"Invalid mish signature: {signature}")
+
+        # Parse chunk entries (40 bytes each)
+        chunks = []
+        offset = 204
+        for _ in range(block_descriptors):
+            if offset + 40 > len(data):
+                break
+
+            entry_type, sector_num, sec_count, comp_offset, comp_length = struct.unpack(
+                ">IxxxxQQQQ", data[offset : offset + 40]
+            )
+
+            chunks.append(
+                ChunkEntry(
+                    entry_type=entry_type,
+                    sector_number=sector_num,
+                    sector_count=sec_count,
+                    compressed_offset=comp_offset,
+                    compressed_length=comp_length,
+                )
+            )
+            offset += 40
+
+        return cls(
+            signature=signature,
+            version=version,
+            sector_number=sector_number,
+            sector_count=sector_count,
+            data_offset=data_offset,
+            buffers_needed=buffers_needed,
+            block_descriptors=block_descriptors,
+            reserved=reserved_48 + reserved_76,  # Concatenate both reserved fields
+            checksum_type=checksum_type,
+            checksum_size=checksum_size,
+            checksum=checksum,
+            chunks=chunks,
+        )
 
 
 @dataclass
@@ -221,7 +372,8 @@ class KolyBlockAnalyzer(Analyzer[None, KolyBlock]):
             raise ValueError(f"Koly block must be 512 bytes, got {len(data)}")
 
         # Parse koly block fields using struct.unpack (big-endian)
-        # Total must be 512 bytes - current format is 326 bytes, so add 186 bytes padding
+        # Total must be 512 bytes
+        # DataChecksum is 128 bytes (32 uint32s), not 32 bytes!
         (
             signature,
             version,
@@ -235,23 +387,21 @@ class KolyBlockAnalyzer(Analyzer[None, KolyBlock]):
             segment_number,
             segment_count,
             segment_id,
-            reserved_6,
             data_checksum_type,
             data_checksum_size,
-            data_checksum,
+            data_checksum,  # 128 bytes (32 uint32s)
             xml_offset,
             xml_length,
             reserved1,
             master_checksum_type,
             master_checksum_size,
-            master_checksum,
+            master_checksum,  # 128 bytes (32 uint32s)
             image_variant,
             sector_count,
             reserved2,
             reserved3,
             reserved4,
-            reserved_padding,
-        ) = struct.unpack(">4sIIIQQQQQII16s6sII32sQQ120sII32sIQIII186s", data)
+        ) = struct.unpack(">4sIIIQQQQQII16sII128sQQ120sII128sIQIII", data)
 
         if signature != b"koly":
             raise ValueError(f"Invalid koly signature: {signature}")
@@ -467,52 +617,73 @@ class DmgUnpacker(Unpacker[None]):
         plist = plistlib.loads(xml_data)
 
         # Find all blkx entries (block map descriptors)
+        # Each blkx entry represents a separate partition
         resource_fork = plist.get("resource-fork", {})
         blkx_entries = resource_fork.get("blkx", [])
 
         if not blkx_entries:
             raise ValueError("No blkx entries found in DMG plist")
 
-        # Process each blkx entry and extract chunks
-        all_chunks: List[Tuple[int, bytes]] = []
+        # Process each blkx entry as a separate partition
+        for blkx_index, blkx in enumerate(blkx_entries):
+            # Get partition metadata
+            partition_name = blkx.get("Name", f"partition_{blkx_index}")
+            partition_id = blkx.get("ID", str(blkx_index))
 
-        for blkx in blkx_entries:
-            # The 'Data' field contains base64-encoded mish block
-            mish_data_b64 = blkx.get("Data")
-            if not mish_data_b64:
+            # The 'Data' field contains mish block data
+            # plistlib automatically decodes base64 Data fields to bytes
+            mish_data = blkx.get("Data")
+            if not mish_data:
                 continue
 
-            mish_data = base64.b64decode(mish_data_b64)
+            # If Data field is still string/base64, decode it
+            # (older plistlib versions may not auto-decode)
+            if isinstance(mish_data, str):
+                mish_data = base64.b64decode(mish_data)
 
             # Parse mish block directly
-            mish = self._parse_mish_block(mish_data)
+            if len(mish_data) < 204:
+                # Skip partitions with truncated mish blocks
+                print(f"Warning: Skipping partition '{partition_name}' with truncated mish block ({len(mish_data)} bytes)")
+                continue
 
-            # Process each chunk in the mish block
+            try:
+                mish = self._parse_mish_block(mish_data)
+            except ValueError as e:
+                # Skip partitions with corrupted mish blocks
+                print(f"Warning: Skipping partition '{partition_name}' due to error: {e}")
+                continue
+
+            # Process each chunk in this partition's mish block
+            partition_chunks: List[Tuple[int, bytes]] = []
+
             for chunk in mish.chunks:
                 if chunk.entry_type == COMPRESSION_TERMINATOR:
                     # End of chunks
                     break
 
-                decompressed_data = self._decompress_chunk(
+                decompressed_data = DmgUnpacker._decompress_chunk(
                     dmg_data, chunk, koly.data_fork_offset
                 )
 
                 if decompressed_data:
-                    # Store with sector position for proper ordering
-                    all_chunks.append((chunk.sector_number, decompressed_data))
+                    # Store with sector position for proper ordering within partition
+                    partition_chunks.append((chunk.sector_number, decompressed_data))
 
-        # Sort chunks by sector number and concatenate
-        all_chunks.sort(key=lambda x: x[0])
-        disk_image_data = b"".join(chunk_data for _, chunk_data in all_chunks)
+            # Sort chunks by sector number within this partition and concatenate
+            partition_chunks.sort(key=lambda x: x[0])
+            partition_data = b"".join(chunk_data for _, chunk_data in partition_chunks)
 
-        # Create child resource with the extracted disk image
-        await resource.create_child(
-            tags=(GenericBinary,),
-            data=disk_image_data,
-        )
+            # Create child resource for this partition
+            # TODO: Could add partition metadata as attributes (name, id, etc.)
+            await resource.create_child(
+                tags=(GenericBinary,),
+                data=partition_data,
+            )
 
+    @staticmethod
     def _decompress_chunk(
-        self, dmg_data: bytes, chunk: ChunkEntry, data_fork_offset: int
+        dmg_data: bytes, chunk: ChunkEntry, data_fork_offset: int
     ) -> Optional[bytes]:
         """
         Decompress a single chunk based on its compression type.
@@ -530,6 +701,10 @@ class DmgUnpacker(Unpacker[None]):
         # Zero-fill: return zeros
         if chunk_type == COMPRESSION_ZERO_FILL:
             return b"\x00" * (chunk.sector_count * 512)
+
+        # Ignore/free space: skip
+        if chunk_type == COMPRESSION_IGNORE:
+            return None
 
         # Comment block: skip
         if chunk_type == COMPRESSION_COMMENT:
@@ -591,6 +766,7 @@ class DmgUnpacker(Unpacker[None]):
             raise ValueError(f"Koly block must be 512 bytes, got {len(data)}")
 
         # Parse koly block (512 bytes total) using struct.unpack (big-endian)
+        # DataChecksum is 128 bytes (32 uint32s), not 32 bytes!
         (
             signature,
             version,
@@ -604,23 +780,21 @@ class DmgUnpacker(Unpacker[None]):
             segment_number,
             segment_count,
             segment_id,
-            reserved_6,  # 6 bytes padding - not stored in KolyBlock
             data_checksum_type,
             data_checksum_size,
-            data_checksum,
+            data_checksum,  # 128 bytes (32 uint32s)
             xml_offset,
             xml_length,
             reserved1,
             master_checksum_type,
             master_checksum_size,
-            master_checksum,
+            master_checksum,  # 128 bytes (32 uint32s)
             image_variant,
             sector_count,
             reserved2,
             reserved3,
             reserved4,
-            reserved_padding,  # 186 bytes padding - not stored in KolyBlock
-        ) = struct.unpack(">4sIIIQQQQQII16s6sII32sQQ120sII32sIQIII186s", data)
+        ) = struct.unpack(">4sIIIQQQQQII16sII128sQQ120sII128sIQIII", data)
 
         if signature != b"koly":
             raise ValueError(f"Invalid koly signature: {signature}")
@@ -692,7 +866,14 @@ class DmgUnpacker(Unpacker[None]):
         # Parse chunk entries (40 bytes each)
         chunks = []
         offset = 204
-        for _ in range(block_descriptors):
+        for i in range(block_descriptors):
+            if offset + 40 > len(data):
+                raise ValueError(
+                    f"Mish block truncated: expected {block_descriptors} chunk entries "
+                    f"but only have data for {i} entries "
+                    f"(need {block_descriptors * 40 + 204} bytes, got {len(data)} bytes)"
+                )
+
             (
                 entry_type,
                 padding,
@@ -797,9 +978,10 @@ class DmgPacker(Packer[None]):
         import struct
 
         # Serialize all koly block fields using struct.pack (big-endian)
-        # Must be 512 bytes total - adding 186 bytes padding at end
+        # Must be 512 bytes total
+        # DataChecksum and master checksum are each 128 bytes (32 uint32s)
         return struct.pack(
-            ">4sIIIQQQQQII16s6sII32sQQ120sII32sIQIII186s",
+            ">4sIIIQQQQQII16sII128sQQ120sII128sIQIII",
             b"koly",
             original_koly.version,
             512,  # header_size
@@ -812,22 +994,20 @@ class DmgPacker(Packer[None]):
             original_koly.segment_number,
             original_koly.segment_count,
             original_koly.segment_id,
-            b"\x00" * 6,  # reserved
             original_koly.data_checksum_type,
             original_koly.data_checksum_size,
-            original_koly.data_checksum,
+            original_koly.data_checksum,  # 128 bytes
             0,  # xml_offset (no plist)
             0,  # xml_length (no plist)
             original_koly.reserved1,
             original_koly.master_checksum_type,
             original_koly.master_checksum_size,
-            original_koly.master_checksum,
+            original_koly.master_checksum,  # 128 bytes
             original_koly.image_variant,
             sector_count,
             0,  # reserved2
             0,  # reserved3
             0,  # reserved4
-            b"\x00" * 186,  # reserved padding to reach 512 bytes
         )
 
 

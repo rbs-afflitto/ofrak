@@ -97,13 +97,14 @@ def create_simple_dmg(data: bytes) -> bytes:
     mish_data = mish_header + mish_chunks
 
     # Create plist with blkx entry
+    # Note: plistlib automatically base64-encodes bytes values when serializing
     plist_data = {
         'resource-fork': {
             'blkx': [
                 {
                     'Attributes': '0x0050',
                     'CFName': 'whole disk (Apple_HFS : 0)',
-                    'Data': base64.b64encode(mish_data),
+                    'Data': mish_data,  # plistlib will base64-encode this automatically
                     'ID': '0',
                     'Name': 'whole disk (Apple_HFS : 0)',
                 }
@@ -158,16 +159,13 @@ def create_simple_dmg(data: bytes) -> bytes:
     koly_data[offset:offset+16] = b'\x00' * 16
     offset += 16
 
-    # Skip 6 reserved bytes
-    offset += 6
-
-    # Add checksum fields
+    # Add checksum fields (data_checksum is 128 bytes)
     checksum_data = struct.pack(">II", 0, 0)  # data_checksum_type, data_checksum_size
     koly_data[offset:offset+len(checksum_data)] = checksum_data
     offset += len(checksum_data)
 
-    # Skip 32 bytes for data checksum
-    offset += 32
+    # Skip 128 bytes for data checksum
+    offset += 128
 
     # Add xml offset and length
     xml_info = struct.pack(">QQ", xml_offset, xml_length)
@@ -177,12 +175,12 @@ def create_simple_dmg(data: bytes) -> bytes:
     # Skip 120 reserved bytes
     offset += 120
 
-    # Add master checksum fields and image info
+    # Add master checksum fields and image info (master_checksum is 128 bytes)
     final_data = struct.pack(
-        ">II32sIQIII",
+        ">II128sIQIII",
         0,              # master_checksum_type (4 bytes)
         0,              # master_checksum_size (4 bytes)
-        b'\x00' * 32,   # master_checksum (32 bytes)
+        b'\x00' * 128,  # master_checksum (128 bytes)
         0,              # image_variant (4 bytes)
         sector_count,   # sector_count (8 bytes)
         0,              # reserved2 (4 bytes)
@@ -263,7 +261,7 @@ def create_compressed_dmg(data: bytes) -> bytes:
                 {
                     'Attributes': '0x0050',
                     'CFName': 'whole disk',
-                    'Data': base64.b64encode(mish_data),
+                    'Data': mish_data,  # plistlib will base64-encode this automatically
                     'ID': '0',
                     'Name': 'whole disk',
                 }
@@ -466,25 +464,25 @@ class TestDmgUnpacker:
         # Add segment_id
         offset = struct.calcsize(">4sIIIQQQQQII")
         koly_data[offset:offset+16] = b'\xAA' * 16
-        offset += 16 + 6
+        offset += 16
 
-        # Add checksum fields
-        checksum_data = struct.pack(">II", 1, 32)
+        # Add checksum fields (data_checksum is 128 bytes)
+        checksum_data = struct.pack(">II", 1, 128)
         koly_data[offset:offset+len(checksum_data)] = checksum_data
-        offset += len(checksum_data) + 32
+        offset += len(checksum_data) + 128
 
         # Add XML info
         xml_info = struct.pack(">QQ", 0x5000, 0x1000)
         koly_data[offset:offset+len(xml_info)] = xml_info
         offset += len(xml_info) + 120
 
-        # Add final fields: master_checksum_type, master_checksum_size, master_checksum (32 bytes),
+        # Add final fields: master_checksum_type, master_checksum_size, master_checksum (128 bytes),
         # image_variant, sector_count, reserved2, reserved3, reserved4
         final_data = struct.pack(
-            ">II32sIQIII",
+            ">II128sIQIII",
             2,              # master_checksum_type (4 bytes)
-            32,             # master_checksum_size (4 bytes)
-            b'\x00' * 32,   # master_checksum (32 bytes)
+            128,            # master_checksum_size (4 bytes)
+            b'\x00' * 128,  # master_checksum (128 bytes)
             0,              # image_variant (4 bytes)
             0x10000,        # sector_count (8 bytes)
             0,              # reserved2 (4 bytes)
